@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, g
+from flask import Flask, request, jsonify, g, make_response
 from flask.views import MethodView
 from models import Advertisement, User
 from database import db, init_db
@@ -12,6 +12,11 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# Настройки кодировки
+app.config['JSON_AS_ASCII'] = False  # Важно для русского языка
+app.config['JSONIFY_PRETTYPRINT_REGULAR'] = True
+
+# Инициализация базы данных
 init_db(app)
 
 
@@ -23,16 +28,25 @@ class HttpError(Exception):
 
 @app.errorhandler(HttpError)
 def error_handler(error: HttpError):
-    response = jsonify({'status': 'error', 'message': error.message})
+    response = make_response(jsonify({'status': 'error', 'message': error.message}))
     response.status_code = error.status_code
+    response.headers['Content-Type'] = 'application/json; charset=utf-8'
     return response
 
 
 def validate_data(data: dict, validator_class):
     try:
-        return validator_class(**data).model_dump(exclude_none=True)  # Изменено на model_dump
+        return validator_class(**data).model_dump(exclude_none=True)
     except ValidationError as error:
         raise HttpError(400, error.errors())
+
+
+def create_json_response(data, status_code=200):
+    """Создает JSON response с правильной кодировкой"""
+    response = make_response(jsonify(data))
+    response.status_code = status_code
+    response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
 
 
 class AdvertisementView(MethodView):
@@ -42,10 +56,10 @@ class AdvertisementView(MethodView):
             advertisement = Advertisement.query.get(ad_id)
             if not advertisement:
                 raise HttpError(404, 'Advertisement not found')
-            return jsonify(advertisement.to_dict())
+            return create_json_response(advertisement.to_dict())
         else:
             advertisements = Advertisement.query.all()
-            return jsonify([ad.to_dict() for ad in advertisements])
+            return create_json_response([ad.to_dict() for ad in advertisements])
 
     @basic_auth_required
     def post(self):
@@ -64,7 +78,7 @@ class AdvertisementView(MethodView):
         db.session.add(advertisement)
         db.session.commit()
 
-        return jsonify(advertisement.to_dict()), 201
+        return create_json_response(advertisement.to_dict(), 201)
 
     @basic_auth_required
     def patch(self, ad_id):
@@ -88,7 +102,7 @@ class AdvertisementView(MethodView):
 
         db.session.commit()
 
-        return jsonify(advertisement.to_dict())
+        return create_json_response(advertisement.to_dict())
 
     @basic_auth_required
     def delete(self, ad_id):
@@ -106,7 +120,7 @@ class AdvertisementView(MethodView):
         db.session.delete(advertisement)
         db.session.commit()
 
-        return jsonify({'message': 'Advertisement deleted successfully'})
+        return create_json_response({'message': 'Advertisement deleted successfully'})
 
 
 class UserView(MethodView):
@@ -123,10 +137,10 @@ class UserView(MethodView):
         db.session.add(user)
         db.session.commit()
 
-        return jsonify({
+        return create_json_response({
             'message': 'User created successfully',
             'user_id': user.id
-        }), 201
+        }, 201)
 
 
 # Регистрация роутов
@@ -134,6 +148,15 @@ app.add_url_rule('/ads/', view_func=AdvertisementView.as_view('ads'), methods=['
 app.add_url_rule('/ads/<int:ad_id>/', view_func=AdvertisementView.as_view('ad_detail'),
                  methods=['GET', 'PATCH', 'DELETE'])
 app.add_url_rule('/register/', view_func=UserView.as_view('register'), methods=['POST'])
+
+
+@app.after_request
+def after_request(response):
+    """Добавляем заголовки кодировки ко всем ответам"""
+    if response.content_type.startswith('application/json'):
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+    return response
+
 
 if __name__ == '__main__':
     app.run(host='127.0.0.1', port=5000, debug=True)
